@@ -1,0 +1,38 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets and machine state — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+config.json
+accounts/
+*.sqlite
+*.sqlite3
+
+# Runtime logs
+*.log
+logs/
+
+# Local research and live-account probes
+research_notes/
+reports/
+inspect_antigravity_keychain.py
+probe_antigravity.py
