@@ -36,3 +36,7 @@ research_notes/
 reports/
 inspect_antigravity_keychain.py
 probe_antigravity.py
+
+# Menu bar app build
+macos/.build/
+macos/build/

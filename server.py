@@ -10,10 +10,10 @@ os.environ.setdefault('LITELLM_LOCAL_MODEL_COST_MAP', 'True')
 import httpx
 import litellm
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from switchboard import Store, CLAUDE_SETTINGS, connect_claude, disconnect_claude
+from switchboard import Store, CLAUDE_SETTINGS, connect_claude, disconnect_claude, restore_claude_default
 from antigravity_bridge import AntigravityBridge, listed_models as antigravity_models
 import anthropic_bridge
 import compat
@@ -73,7 +73,7 @@ def current_intelligence(store):
     return intelligence.snapshot(store, grok_bridge.session_info(), {'antigravity_models': antigravity_models()})
 
 
-def routed_providers(store):
+def routed_providers(store, payload=None):
     with store.lock:
         snap = current_intelligence(store)
         by_id = {item['id']: dict(item) for item in store.data['providers']}
@@ -81,17 +81,37 @@ def routed_providers(store):
         active = store.data.get('active')
     if not smart:
         item = by_id.get(active)
-        return [item] if item and item.get('enabled') else []
-    result = []
-    for row in intelligence.candidates(snap['routes']):
-        item = by_id.get(row['id'])
-        if item and item.get('enabled'):
-            result.append(item)
-    if not result:
-        item = by_id.get(active)
-        if item and item.get('enabled'):
-            result.append(item)
+        result = [item] if item and item.get('enabled') else []
+    else:
+        result = []
+        for row in intelligence.candidates(snap['routes']):
+            item = by_id.get(row['id'])
+            if item and item.get('enabled'):
+                result.append(item)
+        if not result:
+            item = by_id.get(active)
+            if item and item.get('enabled'):
+                result.append(item)
+        result = result[:3]
+    if payload and payload.get('safeguards'):
+        anthropic = [item for item in result if item['model'].startswith('anthropic/') and anthropic_bridge.has_key(item)]
+        if not anthropic:
+            seen = {item['id'] for item in result}
+            for item in by_id.values():
+                if item.get('enabled') and item['model'].startswith('anthropic/') and item['id'] not in seen and anthropic_bridge.has_key(item):
+                    anthropic.append(item)
+        if anthropic:
+            return anthropic[:3]
     return result[:3]
+
+
+def anthropic_response(status, headers, body, streaming=False):
+    extra = {key: value for key, value in headers.items() if key != 'content-type'}
+    extra['X-Accel-Buffering'] = 'no'
+    media = anthropic_bridge.response_media(headers, streaming)
+    if streaming and status < 400:
+        return StreamingResponse(body, status_code=status, media_type=media, headers=extra)
+    return Response(content=body, status_code=status, media_type=media, headers=extra)
 
 
 def retryable(message):
@@ -270,6 +290,8 @@ def create_app(store=None, settings_path=CLAUDE_SETTINGS, agent_manager=None):
             connect_claude(store, settings_path)
         elif action == 'disconnect':
             disconnect_claude(store, settings_path)
+        elif action == 'restore':
+            restore_claude_default(store, settings_path)
         else:
             raise HTTPException(404)
         return {'ok': True}
@@ -346,16 +368,43 @@ def create_app(store=None, settings_path=CLAUDE_SETTINGS, agent_manager=None):
     async def messages(request: Request):
         if not authorized(request, store):
             return auth_error()
-        providers = routed_providers(store)
-        if not providers:
-            return JSONResponse({'type':'error','error':{'type':'api_error','message':'No enabled provider is active in Switchboard.'}}, status_code=503)
         try:
             payload = await request.json()
         except Exception:
             return JSONResponse({'type':'error','error':{'type':'invalid_request_error','message':'Request body must be JSON.'}}, status_code=400)
+        providers = routed_providers(store, payload)
+        if not providers:
+            return JSONResponse({'type':'error','error':{'type':'api_error','message':'No enabled provider is active in Switchboard.'}}, status_code=503)
         last_error = 'No enabled provider is active in Switchboard.'
+        last_upstream = None
         for provider in providers:
             try:
+                if provider['model'].startswith('anthropic/'):
+                    streaming = bool(payload.get('stream'))
+                    status, headers, body = await anthropic_bridge.post_messages(
+                        provider, payload, request.headers, stream=streaming, query=str(request.url.query),
+                    )
+                    if streaming and status < 400:
+                        return anthropic_response(status, headers, body, True)
+                    if status < 400:
+                        try:
+                            data = json.loads(body)
+                        except Exception:
+                            data = None
+                        if isinstance(data, dict):
+                            store.record_probe(provider['id'], True, usage=data.get('usage'))
+                        return anthropic_response(status, headers, body, False)
+                    try:
+                        err = json.loads(body)
+                        last_error = ((err.get('error') or {}).get('message') if isinstance(err, dict) else None) or body.decode('utf-8', 'replace')[:700]
+                    except Exception:
+                        last_error = body.decode('utf-8', 'replace')[:700]
+                    last_error = safe_error(last_error, provider)
+                    last_upstream = (status, headers, body)
+                    store.record_probe(provider['id'], False, last_error)
+                    if not retryable(last_error):
+                        return anthropic_response(status, headers, body, False)
+                    continue
                 buffered = bool(payload.get('stream') and provider['model'].startswith('antigravity/'))
                 outgoing = {**payload, 'stream':False} if buffered else payload
                 response = await call_model(provider, outgoing)
@@ -382,6 +431,9 @@ def create_app(store=None, settings_path=CLAUDE_SETTINGS, agent_manager=None):
                 store.record_probe(provider['id'], False, last_error)
                 if not retryable(last_error):
                     break
+        if last_upstream:
+            status, headers, body = last_upstream
+            return anthropic_response(status, headers, body, False)
         return JSONResponse({'type':'error','error':{'type':'api_error','message':last_error}}, status_code=502)
 
     app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')

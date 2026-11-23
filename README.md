@@ -2,7 +2,7 @@
 
 A local-first LLM gateway for one user on one machine. Point Claude Code, Cline, Continue, Aider, OpenCode, Codex, or any OpenAI-compatible client at a loopback listener, then route each request through a provider you already pay for: Anthropic, Grok, GitHub Copilot, ChatGPT, Ollama, or a generic API.
 
-The dashboard title and data directory still use the name **Agent Switchboard**. This repository is `model-switchboard`.
+The dashboard title and data directory still use the name **Agent Switchboard**. This repository is `agent-switchboard`.
 
 ```
 Claude Code / Cline / Continue / Aider
@@ -19,10 +19,11 @@ The system proxy is never changed. The listener binds only to `127.0.0.1`.
 ## Features
 
 - **One local URL** for Anthropic Messages (`http://127.0.0.1:18765`) and OpenAI Chat Completions (`http://127.0.0.1:18765/v1`)
-- **Connect Claude Code** from the browser. Disconnect restores the previous user settings and refuses if those keys were edited elsewhere
+- **Connect Claude Code** from the browser. Disconnect restores the previous user settings and refuses if those keys were edited elsewhere. **Use Anthropic default** always clears the gateway env (`ANTHROPIC_BASE_URL`, token, `switchboard` model aliases) so Claude Code talks to Anthropic with the user’s Claude subscription again, even if those keys were edited outside Switchboard
 - **Access scan** that treats a catalog list as a hint, not as access. Copilot Claude ids that return `model_not_supported` are marked blocked
 - **Smart routing** that prefers a proven Claude-family route, then Grok or GPT, and fails over on quota, expiry, or `model_not_supported`
 - **Official Anthropic** as a first-class provider, always calling `https://api.anthropic.com`, never this listener
+- **Claude Code auto mode** pass-through: official Anthropic `/v1/messages` keeps `anthropic-beta` and `safeguards` on the way in and `safeguard_results` (including streamed `message_delta`) on the way out, so new sessions can use no-charge server-side classifier checks
 - **ChatGPT and Copilot** device logins stored in Switchboard’s own account folder, not reused from Codex or the Copilot CLI
 - **Grok Build** via the existing `grok login` session
 - **Ollama and generic OpenAI-compatible** endpoints
@@ -37,8 +38,8 @@ The system proxy is never changed. The listener binds only to `127.0.0.1`.
 ## Install
 
 ```sh
-git clone https://github.com/sai-prakash/model-switchboard.git
-cd model-switchboard
+git clone https://github.com/sai-prakash/agent-switchboard.git
+cd agent-switchboard
 python3 -m venv .venv
 ```
 
@@ -58,10 +59,25 @@ Windows:
 
 Open [http://127.0.0.1:18765](http://127.0.0.1:18765).
 
+## Mac menu bar
+
+On macOS 13+, build a menu bar extra that starts and stops the gateway, connects Claude Code, restores Anthropic default, scans access, and picks a route:
+
+```sh
+chmod +x macos/package-app.sh
+macos/package-app.sh
+open ~/Applications/Switchboard.app
+```
+
+That opens a **Switchboard** window and a Dock icon, and puts **Switchboard** in the menu bar (right side, near Control Center). If the extra is missing, click the `«` chevron next to Control Center, or click the Dock icon. Closing the window does not quit; **Quit** in the window or menu does. **Start** / **Stop** keep the login LaunchAgent installed. Rebuild after you move this checkout; the bundle records the project path.
+
 On macOS, `service.py start` kickstarts the login LaunchAgent if one is already installed. Otherwise it runs Uvicorn in the foreground.
 
 ```sh
 .venv/bin/python service.py install     # macOS login item
+.venv/bin/python service.py start       # start (bootstrap if it was stopped)
+.venv/bin/python service.py stop        # stop, keep the login item
+.venv/bin/python service.py status      # JSON: running, installed, url
 .venv/bin/python service.py uninstall   # remove the login item only
 ```
 
@@ -73,7 +89,8 @@ Uninstall does not delete provider data or restore Claude Code settings. Disconn
 2. Select **Test**, then **Use**.
 3. Select **Scan access** so routing knows which saved models this account can actually call.
 4. Select **Connect Claude Code** and restart Claude Code.
-5. For other tools, copy the OpenAI URL and gateway token from the dashboard.
+5. To send Claude Code back to Anthropic, select **Use Anthropic default** and restart Claude Code. That removes the gateway URL and `switchboard` model aliases. **Disconnect Claude Code** instead restores whatever was in settings before Connect.
+6. For other tools, copy the OpenAI URL and gateway token from the dashboard.
 
 | Client | Base URL | Auth | Model |
 | --- | --- | --- | --- |
@@ -96,6 +113,8 @@ That directory is **not** part of this git repo. It holds the gateway token, pro
 ## Providers
 
 **Anthropic Claude.** Add the Anthropic API preset and paste a key from [console.anthropic.com](https://console.anthropic.com). Use `anthropic/claude-sonnet-4-6`, `anthropic/claude-opus-4-6`, or another Claude API model id. Switchboard always calls `https://api.anthropic.com` and refuses a base URL that points at this gateway. It does not read process-env `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` for upstream calls, because Claude Code uses those to reach Switchboard. Optional override: `SWITCHBOARD_ANTHROPIC_API_KEY`.
+
+Claude Code auto mode’s no-charge classifier needs that official Anthropic route. Switchboard forwards the `anthropic-beta` header and `safeguards` body field unchanged and returns `safeguard_results` without rewriting tool-use IDs. Requests that include `safeguards` use an enabled `anthropic/` provider with a saved key and do not fail over to Grok or other non-Anthropic routes. If no official Anthropic provider is configured, those requests keep using the smart-routed provider and the session stays on billed client-side classifier checks. After updating the gateway, start a **new** Claude Code session; `/status` should show **Auto mode server: Enabled**.
 
 **ChatGPT / Codex.** Connect from the dashboard with a device code. Switchboard stores its own login under `accounts/chatgpt` in the data directory and does not reuse the Codex CLI session. Use a `chatgpt/<model>` identifier such as `chatgpt/gpt-6.1-sol`.
 

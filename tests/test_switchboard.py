@@ -1,9 +1,10 @@
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from switchboard import Store, connect_claude, disconnect_claude
+from switchboard import Store, connect_claude, disconnect_claude, restore_claude_default
 
 
 class StoreTests(unittest.TestCase):
@@ -37,7 +38,49 @@ class StoreTests(unittest.TestCase):
             settings.write_text(__import__('json').dumps(data))
             with self.assertRaises(ValueError):
                 disconnect_claude(store, settings)
-            self.assertEqual(__import__('json').loads(settings.read_text())['env']['ANTHROPIC_MODEL'], 'changed-elsewhere')
+            self.assertEqual(json.loads(settings.read_text())['env']['ANTHROPIC_MODEL'], 'changed-elsewhere')
+
+    def test_restore_claude_default_uses_anthropic_not_the_backup(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / 'config.json')
+            settings = Path(d) / 'settings.json'
+            settings.write_text('{"env":{"ANTHROPIC_MODEL":"old","ANTHROPIC_API_KEY":"sk-ant-keep"},"model":"opusplan","other":true}')
+            connect_claude(store, settings, 'http://127.0.0.1:18765')
+            restore_claude_default(store, settings)
+            data = json.loads(settings.read_text())
+            self.assertEqual(data['model'], 'opusplan')
+            self.assertTrue(data['other'])
+            self.assertEqual(data['env'], {'ANTHROPIC_API_KEY': 'sk-ant-keep'})
+            self.assertIsNone(store.data['claude_backup'])
+            self.assertNotIn('ANTHROPIC_BASE_URL', data['env'])
+            self.assertNotIn('ANTHROPIC_AUTH_TOKEN', data['env'])
+            self.assertNotIn('ANTHROPIC_MODEL', data['env'])
+            self.assertNotIn('ANTHROPIC_DEFAULT_OPUS_MODEL', data['env'])
+
+    def test_restore_claude_default_clears_orphaned_gateway_env(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / 'config.json')
+            settings = Path(d) / 'settings.json'
+            settings.write_text('{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:18765","ANTHROPIC_AUTH_TOKEN":"stale","ANTHROPIC_MODEL":"switchboard","KEEP":"yes"}}')
+            restore_claude_default(store, settings)
+            data = json.loads(settings.read_text())
+            self.assertEqual(data['env'], {'KEEP': 'yes'})
+            self.assertIsNone(store.data['claude_backup'])
+
+    def test_restore_claude_default_overrides_external_edits(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / 'config.json')
+            settings = Path(d) / 'settings.json'
+            settings.write_text('{"env":{}}')
+            connect_claude(store, settings, 'http://127.0.0.1:18765')
+            data = json.loads(settings.read_text())
+            data['env']['ANTHROPIC_MODEL'] = 'changed-elsewhere'
+            settings.write_text(json.dumps(data))
+            restore_claude_default(store, settings)
+            env = json.loads(settings.read_text()).get('env', {})
+            self.assertNotIn('ANTHROPIC_BASE_URL', env)
+            self.assertNotIn('ANTHROPIC_MODEL', env)
+            self.assertIsNone(store.data['claude_backup'])
 
     def test_grok_subscription_cannot_override_its_endpoint(self):
         with tempfile.TemporaryDirectory() as d:

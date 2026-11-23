@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Start Switchboard on this machine. macOS can also install a login LaunchAgent."""
+import json
 import os
 import plistlib
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +17,7 @@ LOGS = paths.log_dir()
 DOMAIN = f'gui/{os.getuid()}' if hasattr(os, 'getuid') else ''
 HOST = '127.0.0.1'
 PORT = '18765'
+COMMANDS = ('install', 'uninstall', 'start', 'stop', 'status')
 
 
 def venv_python():
@@ -24,6 +27,36 @@ def venv_python():
     other = unix if candidate == windows else windows
     chosen = candidate if candidate.exists() else other
     return str(chosen if chosen.exists() else Path(sys.executable))
+
+
+def port_open():
+    sock = socket.socket()
+    sock.settimeout(0.3)
+    try:
+        sock.connect((HOST, int(PORT)))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def loaded():
+    if sys.platform != 'darwin' or not DOMAIN:
+        return False
+    result = subprocess.run(['/bin/launchctl', 'print', f'{DOMAIN}/{LABEL}'], capture_output=True)
+    return result.returncode == 0
+
+
+def status():
+    return {
+        'running': port_open(),
+        'installed': PLIST.exists(),
+        'loaded': loaded(),
+        'url': 'http://' + HOST + ':' + PORT,
+        'label': LABEL,
+        'root': str(ROOT),
+    }
 
 
 def install():
@@ -56,6 +89,8 @@ def uninstall():
 
 def start():
     if sys.platform == 'darwin' and PLIST.exists() and DOMAIN:
+        if not loaded():
+            subprocess.run(['/bin/launchctl', 'bootstrap', DOMAIN, str(PLIST)], check=False)
         subprocess.run(['/bin/launchctl', 'kickstart', '-k', f'{DOMAIN}/{LABEL}'], check=False)
         print('Started. Open http://127.0.0.1:18765')
         return
@@ -64,7 +99,20 @@ def start():
     os.execv(executable, [executable, '-m', 'uvicorn', 'server:app', '--host', HOST, '--port', PORT, '--no-access-log'])
 
 
+def stop():
+    if sys.platform != 'darwin' or not DOMAIN:
+        raise SystemExit('Stop is macOS LaunchAgent only.')
+    if not PLIST.exists():
+        raise SystemExit('No Switchboard LaunchAgent is installed.')
+    subprocess.run(['/bin/launchctl', 'bootout', DOMAIN, str(PLIST)], check=False)
+    print('Stopped.')
+
+
 if __name__ == '__main__':
-    if len(sys.argv) != 2 or sys.argv[1] not in ('install', 'uninstall', 'start'):
-        raise SystemExit('Usage: python service.py start|install|uninstall')
-    {'install': install, 'uninstall': uninstall, 'start': start}[sys.argv[1]]()
+    if len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
+        raise SystemExit('Usage: python service.py start|stop|status|install|uninstall')
+    command = sys.argv[1]
+    if command == 'status':
+        print(json.dumps(status()))
+    else:
+        {'install': install, 'uninstall': uninstall, 'start': start, 'stop': stop}[command]()

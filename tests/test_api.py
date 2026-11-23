@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from server import create_app
-from switchboard import Store
+from switchboard import Store, connect_claude
 
 
 class APITests(unittest.TestCase):
@@ -25,6 +25,18 @@ class APITests(unittest.TestCase):
         r = self.client.post('/api/providers', json={'name':'a','model':'openai/a'}, headers={'origin':'https://evil.example'})
         self.assertEqual(r.status_code, 403)
         self.assertEqual(self.client.get('/api/state', headers={'x-switchboard-ui':'1'}).status_code, 200)
+
+    def test_restore_claude_default_endpoint_clears_gateway_settings(self):
+        settings = Path(self.tmp.name) / 'settings.json'
+        settings.write_text('{"env":{"ANTHROPIC_MODEL":"old"},"model":"opusplan"}')
+        connect_claude(self.store, settings, 'http://127.0.0.1:18765')
+        response = self.client.post('/api/claude/restore', headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        data = json.loads(settings.read_text())
+        self.assertEqual(data['model'], 'opusplan')
+        self.assertNotIn('ANTHROPIC_BASE_URL', data.get('env', {}))
+        self.assertNotIn('ANTHROPIC_MODEL', data.get('env', {}))
+        self.assertFalse(self.client.get('/api/state', headers=self.headers).json()['claude_connected'])
 
     def test_gateway_requires_token_and_active_route(self):
         self.assertEqual(self.client.post('/v1/messages', json={}).status_code, 401)

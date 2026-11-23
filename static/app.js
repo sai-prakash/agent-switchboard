@@ -105,7 +105,7 @@ function render() {
   $('route-status').classList.toggle('ready', !!active);
   $('claude-state').textContent = state.claude_connected ? 'Connected to Switchboard' : 'Not connected';
   $('claude-connect').textContent = state.claude_connected ? 'Disconnect Claude Code' : 'Connect Claude Code';
-  $('claude-note').textContent = state.claude_connected ? 'Restart Claude Code to apply changes.' : 'Updates your user settings. You can undo this here.';
+  $('claude-note').textContent = state.claude_connected ? 'Restart Claude Code to apply changes. Use Anthropic default to talk to api.anthropic.com with your Claude subscription.' : 'Connect routes Claude Code through this gateway. Use Anthropic default to clear gateway env and use Anthropic again.';
   if (state.gateway) {
     $('anthropic-base').textContent = state.gateway.base_url;
     $('openai-base').textContent = state.gateway.openai_base_url;
@@ -178,6 +178,7 @@ $('preset').onchange = e => { const [name, model, base] = presets[e.target.value
 $('model').addEventListener('input', syncCredentialFields);
 $('provider-form').onsubmit = async e => { e.preventDefault(); try { await api('/providers', {method:'POST', body:JSON.stringify({id:editing?.id, name:$('name').value, model:$('model').value, api_base:$('base').value, api_key:$('key').value, enabled:$('enabled').checked})}); closeEditor(); await refresh(); notify('Provider saved. Test it before use.'); } catch (error) { notify(error.message); } };
 $('claude-connect').onclick = async () => { try { await api('/claude/' + (state.claude_connected ? 'disconnect' : 'connect'), {method:'POST'}); await refresh(); notify('Claude Code settings updated. Restart Claude Code to apply changes.'); } catch (error) { notify(error.message); } };
+$('claude-restore').onclick = async () => { try { await api('/claude/restore', {method:'POST'}); await refresh(); notify('Claude Code will use Anthropic again. Restart Claude Code to apply changes.'); } catch (error) { notify(error.message); } };
 $('smart-route').onchange = async e => { try { intel = await api('/intelligence', {method:'POST', body: JSON.stringify({smart_route: e.target.checked})}); await refresh(); notify(e.target.checked ? 'Smart routing is on. New requests use the best proven route.' : 'Smart routing is off. New requests use the selected route.'); } catch (error) { notify(error.message); } };
 $('scan-access').onclick = async () => { const button = $('scan-access'); button.disabled = true; try { notify('Scanning saved models…'); intel = await api('/intelligence/scan', {method:'POST'}); await refresh(); notify(intel.reason || 'Scan complete.'); } catch (error) { notify(error.message); } finally { button.disabled = false; } };
 async function copyText(value, message) {

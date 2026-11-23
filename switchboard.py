@@ -173,3 +173,17 @@ def disconnect_claude(store, path=CLAUDE_SETTINGS):
         write_json(path, settings)
         store.data['claude_backup'] = None
         store.persist()
+
+
+def restore_claude_default(store, path=CLAUDE_SETTINGS):
+    with store.lock:
+        if path.exists():
+            settings = read_settings(path)
+            env = settings.setdefault('env', {})
+            for key in MANAGED:
+                env.pop(key, None)
+            if not env:
+                settings.pop('env', None)
+            write_json(path, settings)
+        store.data['claude_backup'] = None
+        store.persist()
